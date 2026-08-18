@@ -7,6 +7,8 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/lighting.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/present.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/meshlet.task
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/meshlet.mesh
 )
 
 add_executable(vge_tests
@@ -16,6 +18,7 @@ add_executable(vge_tests
     gpu_tests.cpp
     render_tests.cpp
     deferred_tests.cpp
+    meshlet_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

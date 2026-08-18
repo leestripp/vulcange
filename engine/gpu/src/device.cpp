@@ -207,6 +207,7 @@ std::expected<Device, Error> Device::create(const Instance& instance, const Devi
         .pNext = nullptr,
         .synchronization2 = VK_TRUE,
         .dynamicRendering = VK_TRUE,
+        .maintenance4 = VK_TRUE, // glslang emits LocalSizeId for task/mesh shaders
     };
     features12.pNext = &features13;
     VkPhysicalDeviceFeatures2 features2{
@@ -214,9 +215,20 @@ std::expected<Device, Error> Device::create(const Instance& instance, const Devi
         .pNext = &features12,
     };
 
+    // Mesh shader pipeline (Plan §5.3 primary path, §5.6 feature matrix).
+    VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader_features{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+    };
     std::vector<const char*> extensions;
     if (desc.surface != VK_NULL_HANDLE) {
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    if (best->info.features.mesh_shader) {
+        extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        mesh_shader_features.taskShader = VK_TRUE;
+        mesh_shader_features.meshShader = VK_TRUE;
+        mesh_shader_features.pNext = features2.pNext;
+        features2.pNext = &mesh_shader_features;
     }
 
     VkDeviceCreateInfo ci{

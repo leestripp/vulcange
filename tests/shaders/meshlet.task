@@ -1,0 +1,89 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Task (amplification) shader: cluster-level culling per Plan §5.3.
+// Each invocation tests one meshlet (frustum sphere + backface cone, meshopt
+// bounds convention); visible meshlets are compacted into the task payload
+// and emitted as mesh shader workgroups.
+
+layout(local_size_x = 32) in;
+
+layout(set = 0, binding = 0) uniform FrameUBO {
+    mat4 view;
+    mat4 proj;
+    vec3 light_dir;
+    float pad0;
+    vec3 camera_pos;
+    float pad1;
+    vec4 frustum_planes[6]; // (n, d): inside when n.p + d >= 0
+} ubo;
+
+// All meshlet data buffers are uint arrays in the global buffer table (§5.3).
+layout(set = 0, binding = 1) readonly buffer DataBuf { uint data[]; } buffers[];
+
+layout(push_constant) uniform Push {
+    mat4 model;
+    uint texture_index;
+    uint meshlet_count;
+    uint meshlet_buf;
+    uint vertex_buf;
+    uint vidx_buf;
+    uint tidx_buf;
+} push;
+
+taskPayloadSharedEXT struct Payload {
+    uint meshlet_indices[32];
+} payload;
+
+shared uint s_visible_count;
+
+// GpuMeshlet field offsets in uints (64-byte descriptor, meshlet.hpp).
+vec3 read_vec3(uint base, uint o) {
+    const uint b = nonuniformEXT(push.meshlet_buf);
+    return vec3(uintBitsToFloat(buffers[b].data[base + o]),
+                uintBitsToFloat(buffers[b].data[base + o + 1]),
+                uintBitsToFloat(buffers[b].data[base + o + 2]));
+}
+
+void main() {
+    if (gl_LocalInvocationIndex == 0) {
+        s_visible_count = 0;
+    }
+    barrier();
+
+    const uint gid = gl_GlobalInvocationID.x;
+    bool visible = false;
+    if (gid < push.meshlet_count) {
+        const uint base = gid * 16; // 16 uints per GpuMeshlet
+        const vec3 center = read_vec3(base, 4);
+        const uint b = nonuniformEXT(push.meshlet_buf);
+        const float radius = uintBitsToFloat(buffers[b].data[base + 7]);
+        const vec3 cone_axis = read_vec3(base, 12);
+        const float cone_cutoff = uintBitsToFloat(buffers[b].data[base + 11]);
+
+        // Frustum sphere test (world space; model is identity in this test,
+        // cluster DAG transform lands with §7.2).
+        visible = true;
+        for (int i = 0; i < 6; ++i) {
+            if (dot(ubo.frustum_planes[i].xyz, center) + ubo.frustum_planes[i].w < -radius) {
+                visible = false;
+                break;
+            }
+        }
+        // Backface cone test (meshoptimizer convention).
+        if (visible && cone_cutoff < 1.0) {
+            const vec3 dir = center - ubo.camera_pos;
+            if (dot(dir, cone_axis) >= cone_cutoff * length(dir) + radius) {
+                visible = false;
+            }
+        }
+    }
+
+    if (visible) {
+        const uint slot = atomicAdd(s_visible_count, 1);
+        payload.meshlet_indices[slot] = gid;
+    }
+    barrier();
+    EmitMeshTasksEXT(s_visible_count, 1, 1);
+}

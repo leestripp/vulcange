@@ -36,6 +36,13 @@ set(VMA_STATIC_VULKAN_FUNCTIONS OFF CACHE BOOL "" FORCE)
 set(VMA_DYNAMIC_VULKAN_FUNCTIONS ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(vma)
 
+# ---- Third-party: meshoptimizer (Plan §7.2 meshlet cluster LOD) ----
+FetchContent_Declare(meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG        v1.2
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(meshoptimizer)
+
 add_subdirectory(engine/math)
 add_subdirectory(engine/async)
 add_subdirectory(engine/platform)

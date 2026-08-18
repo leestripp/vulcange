@@ -49,7 +49,12 @@ private:
 };
 
 struct GraphicsPipelineDesc {
-    const ShaderModule* vertex = nullptr;   // required
+    // Classic path: vertex is required (mesh/task must be null).
+    // Mesh shader path (Plan §5.3 primary): mesh required, task optional
+    // (cluster culling), vertex must be null.
+    const ShaderModule* vertex = nullptr;
+    const ShaderModule* task = nullptr; // VK_EXT_mesh_shader task (amplification)
+    const ShaderModule* mesh = nullptr; // VK_EXT_mesh_shader mesh
     const ShaderModule* fragment = nullptr; // null = depth-only pass
     std::vector<VkDescriptorSetLayout> set_layouts;
     std::vector<VkPushConstantRange> push_constant_ranges;

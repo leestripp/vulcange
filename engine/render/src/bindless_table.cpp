@@ -12,27 +12,30 @@ BindlessTable::create(const gpu::Device& device, std::uint32_t max_textures) {
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                          VK_SHADER_STAGE_COMPUTE_BIT,
+                          VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT |
+                          VK_SHADER_STAGE_MESH_BIT_EXT,
         },
         VkDescriptorSetLayoutBinding{
             .binding = storage_binding,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .descriptorCount = 1,
+            .descriptorCount = max_buffers,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                          VK_SHADER_STAGE_COMPUTE_BIT,
+                          VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT |
+                          VK_SHADER_STAGE_MESH_BIT_EXT,
         },
         VkDescriptorSetLayoutBinding{
             .binding = textures_binding,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .descriptorCount = max_textures,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                          VK_SHADER_STAGE_COMPUTE_BIT,
+                          VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT |
+                          VK_SHADER_STAGE_MESH_BIT_EXT,
         },
     };
     // Binding flags must cover every binding (indexed by binding position).
     const std::array binding_flags{
         VkDescriptorBindingFlags{0},
-        VkDescriptorBindingFlags{0},
+        VkDescriptorBindingFlags{VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT},
         VkDescriptorBindingFlags{VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                                  VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                                  VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT},
@@ -62,7 +65,7 @@ BindlessTable::create(const gpu::Device& device, std::uint32_t max_textures) {
 
     const std::array pool_sizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, max_buffers},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, max_textures},
     };
     const VkDescriptorPoolCreateInfo pool_ci{
@@ -115,18 +118,21 @@ void BindlessTable::bind_frame_ubo(VkBuffer buffer, VkDeviceSize size,
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
-void BindlessTable::bind_storage_buffer(VkBuffer buffer, VkDeviceSize size,
-                                        VkDeviceSize offset) const {
+std::uint32_t BindlessTable::register_buffer(VkBuffer buffer, VkDeviceSize size,
+                                             VkDeviceSize offset) {
+    const std::uint32_t index = next_buffer_++;
     const VkDescriptorBufferInfo info{.buffer = buffer, .offset = offset, .range = size};
     const VkWriteDescriptorSet write{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .dstSet = set_,
         .dstBinding = storage_binding,
+        .dstArrayElement = index,
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .pBufferInfo = &info,
     };
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    return index;
 }
 
 std::uint32_t BindlessTable::register_texture(VkImageView view, VkSampler sampler) {
@@ -166,7 +172,8 @@ BindlessTable::~BindlessTable() { destroy(); }
 
 BindlessTable::BindlessTable(BindlessTable&& o) noexcept
     : device_(o.device_), pool_(o.pool_), layout_(o.layout_), set_(o.set_),
-      max_textures_(o.max_textures_), next_texture_(o.next_texture_) {
+      max_textures_(o.max_textures_), next_texture_(o.next_texture_),
+      next_buffer_(o.next_buffer_) {
     o.pool_ = VK_NULL_HANDLE;
     o.layout_ = VK_NULL_HANDLE;
     o.set_ = VK_NULL_HANDLE;
@@ -182,6 +189,7 @@ BindlessTable& BindlessTable::operator=(BindlessTable&& o) noexcept {
         set_ = o.set_;
         max_textures_ = o.max_textures_;
         next_texture_ = o.next_texture_;
+        next_buffer_ = o.next_buffer_;
         o.pool_ = VK_NULL_HANDLE;
         o.layout_ = VK_NULL_HANDLE;
         o.set_ = VK_NULL_HANDLE;

@@ -82,10 +82,17 @@ ShaderModule& ShaderModule::operator=(ShaderModule&& o) noexcept {
 
 std::expected<GraphicsPipeline, Error>
 GraphicsPipeline::create(const Device& device, const GraphicsPipelineDesc& desc) {
-    if (desc.vertex == nullptr) {
+    const bool mesh_path = desc.mesh != nullptr;
+    if (mesh_path == (desc.vertex != nullptr)) {
+        // Exactly one of the classic vertex path and the mesh shader path.
+        return std::unexpected(make_error(
+            GpuError::pipeline_creation_failed, VK_ERROR_INITIALIZATION_FAILED,
+            "exactly one of vertex or mesh shader is required"));
+    }
+    if (desc.task != nullptr && !mesh_path) {
         return std::unexpected(make_error(GpuError::pipeline_creation_failed,
                                           VK_ERROR_INITIALIZATION_FAILED,
-                                          "vertex shader is required"));
+                                          "task shader requires the mesh shader path"));
     }
 
     const VkPipelineLayoutCreateInfo layout_ci{
@@ -105,10 +112,18 @@ GraphicsPipeline::create(const Device& device, const GraphicsPipelineDesc& desc)
     }
 
     std::vector<VkPipelineShaderStageCreateInfo> stages;
+    if (desc.task != nullptr) {
+        stages.push_back({.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                          .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
+                          .module = desc.task->handle(),
+                          .pName = desc.task->entry_point().c_str()});
+    }
     stages.push_back({.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                      .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                      .module = desc.vertex->handle(),
-                      .pName = desc.vertex->entry_point().c_str()});
+                      .stage = mesh_path ? VkShaderStageFlagBits{VK_SHADER_STAGE_MESH_BIT_EXT}
+                                         : VkShaderStageFlagBits{VK_SHADER_STAGE_VERTEX_BIT},
+                      .module = mesh_path ? desc.mesh->handle() : desc.vertex->handle(),
+                      .pName = mesh_path ? desc.mesh->entry_point().c_str()
+                                         : desc.vertex->entry_point().c_str()});
     if (desc.fragment != nullptr) {
         stages.push_back({.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                           .stage = VK_SHADER_STAGE_FRAGMENT_BIT,

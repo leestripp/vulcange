@@ -426,7 +426,8 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
         CHECK(bindless->register_texture(fg.texture_view(gb_material), sampler) == 3);
         CHECK(bindless->register_texture(fg.texture_view(scene_color), sampler) == 4);
         bindless->bind_frame_ubo(frame_ubo->handle(), sizeof(FrameUBO));
-        bindless->bind_storage_buffer(vertex_ssbo->handle(), vertex_ssbo->size());
+        bindless->reset_buffers();
+        CHECK(bindless->register_buffer(vertex_ssbo->handle(), vertex_ssbo->size()) == 0);
 
         pool->reset();
         auto cmd = pool->allocate();

@@ -6,7 +6,8 @@
 //
 // Layout (set 0):
 //   binding 0: uniform buffer  — per-frame constants (view/proj, lights)
-//   binding 1: storage buffer  — vertex pulling / global geometry data
+//   binding 1: storage buffer[N] — global buffer table (vertex pulling,
+//              meshlet descriptors, index data); indexed via push constants
 //   binding 2: combined image sampler[N] — global texture table, indexed by
 //              material push constants with nonuniformEXT
 //
@@ -29,6 +30,7 @@ public:
     static constexpr std::uint32_t storage_binding = 1;
     static constexpr std::uint32_t textures_binding = 2;
     static constexpr std::uint32_t default_max_textures = 1024;
+    static constexpr std::uint32_t max_buffers = 256;
 
     BindlessTable() = default;
     ~BindlessTable();
@@ -45,8 +47,14 @@ public:
     [[nodiscard]] VkDescriptorSet set() const noexcept { return set_; }
 
     void bind_frame_ubo(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset = 0) const;
-    void bind_storage_buffer(VkBuffer buffer, VkDeviceSize size,
-                             VkDeviceSize offset = 0) const;
+
+    // Registers a storage buffer into the next table slot; returns its index
+    // for push-constant buffer indexing.
+    [[nodiscard]] std::uint32_t register_buffer(VkBuffer buffer, VkDeviceSize size,
+                                                VkDeviceSize offset = 0);
+
+    // Rewinds the buffer index allocator (call once per frame).
+    void reset_buffers() noexcept { next_buffer_ = 0; }
 
     // Registers a texture into the next table slot; returns its index for
     // push-constant material indexing (§5.3).
@@ -63,6 +71,7 @@ private:
     VkDescriptorSet set_ = VK_NULL_HANDLE;
     std::uint32_t max_textures_ = 0;
     std::uint32_t next_texture_ = 0;
+    std::uint32_t next_buffer_ = 0;
 
     void destroy() noexcept;
 };
