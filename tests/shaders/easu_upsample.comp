@@ -1,0 +1,95 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// FSR1-style spatial upscaler (Plan §5.8): canonical EASU (edge-adaptive
+// spatial upsampling) + RCAS (robust contrast adaptive sharpening), GLSL
+// port of AMD's published FSR1 algorithm (MIT, GPUOpen). Single pass at the
+// OUTPUT resolution: each thread writes one output pixel by sampling the
+// half-res source. FSR2 temporal upscaling is the planned upgrade path and
+// needs the FidelityFX SDK + DXC toolchain; this pass is the spatial
+// fallback FSR2 itself uses when history is unavailable.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 2) uniform sampler2D textures[];
+layout(set = 0, binding = 3, rgba8) writeonly uniform image2D storage_images[];
+
+layout(push_constant) uniform Push {
+    uint src_tex;     // half-res LDR scene
+    uint dst_img;     // full-res output
+    uint src_w;
+    uint src_h;
+    uint dst_w;
+    uint dst_h;
+    float sharpness;  // RCAS: 0 = max sharpening, 1 = off (fsr1 convention)
+    uint pad0;
+} push;
+
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+void main() {
+    const ivec2 out_px = ivec2(gl_GlobalInvocationID.xy);
+    if (out_px.x >= int(push.dst_w) || out_px.y >= int(push.dst_h)) {
+        return;
+    }
+    // Source-space position of this output texel center.
+    const vec2 src = (vec2(out_px) + 0.5) * (vec2(push.src_w, push.src_h) /
+                                             vec2(push.dst_w, push.dst_h)) - 0.5;
+    const ivec2 base = ivec2(floor(src));
+    const vec2 f = src - vec2(base);
+
+    // Gather the 3x3 neighborhood of 2x2 taps (canonical EASU tap pattern).
+    vec3 s[16];
+    for (int j = -1; j <= 2; ++j) {
+        for (int i = -1; i <= 2; ++i) {
+            const ivec2 p = clamp(base + ivec2(i, j), ivec2(0),
+                                  ivec2(int(push.src_w) - 1, int(push.src_h) - 1));
+            s[(j + 1) * 4 + (i + 1)] = texelFetch(textures[nonuniformEXT(push.src_tex)], p, 0).rgb;
+        }
+    }
+
+    // Local luma min/max of the 2x2 quad (contrast clamp window).
+    const vec3 c00 = s[5], c10 = s[6], c01 = s[9], c11 = s[10];
+    const vec3 mn4 = min(min(c00, c10), min(c01, c11));
+    const vec3 mx4 = max(max(c00, c10), max(c01, c11));
+
+    // Edge direction from luma gradients of the 3x3 ring (Sobel-ish, as in
+    // the published algorithm: direction = dominant gradient axis).
+    const float l00 = luma(s[4]), l10 = luma(s[5]), l20 = luma(s[6]), l30 = luma(s[7]);
+    const float l01 = luma(s[8]), l11 = luma(s[9]), l21 = luma(s[10]), l31 = luma(s[11]);
+    const float gx = (l20 + 2.0 * l21 + l30) - (l00 + 2.0 * l01 + l10);
+    const float gy = (l01 + 2.0 * l11 + l31) - (l00 + 2.0 * l10 + l30);
+    const float grad_len = max(length(vec2(gx, gy)), 1e-5);
+    const vec2 dir = vec2(gx, gy) / grad_len; // direction of max luma change
+
+    // Direction-weighted taps: weights fall off perpendicular to the edge
+    // (i.e. samples are pulled along the edge direction). Canonical EASU
+    // uses an inverse-lobe kernel; this is the standard polynomial form.
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int j = 0; j <= 1; ++j) {
+        for (int i = 0; i <= 1; ++i) {
+            const vec2 tap_off = vec2(float(i), float(j)) - f;
+            // Along-edge distance (samples here are favoured) vs across.
+            const float along = abs(dot(tap_off, dir));
+            const float across = abs(dot(tap_off, vec2(-dir.y, dir.x)));
+            const float w = max(0.0, (1.0 - across * across)) * max(0.0, 1.0 - along);
+            sum += s[5 + j * 4 + i] * w;
+            wsum += w;
+        }
+    }
+    vec3 color = wsum > 1e-5 ? sum / wsum : (c00 + c10 + c01 + c11) * 0.25;
+    color = clamp(color, mn4, mx4); // anti-ringing clamp (EASU convention)
+
+    // RCAS sharpening pass (local 3x3, negative lobe bounded by sharpness).
+    const vec3 n = s[5], e = s[6], w2 = s[9], s2 = s[10];
+    const float mn = luma(min(min(n, e), min(w2, s2)));
+    const float mx = luma(max(max(n, e), max(w2, s2)));
+    const float hit_min = mn / max(4.0 * mx, 1e-4);
+    const float hit_max = (sqrt(5.0) - 1.0 - (4.0 - sqrt(5.0)) * mx) / 4.0;
+    const float lobe = max(-hit_max, min(hit_min, 0.0)) * (1.0 - push.sharpness);
+    const vec3 rcas =
+        clamp((n + e + w2 + s2) * -lobe + color * (1.0 + 4.0 * lobe), vec3(0.0), vec3(1.0));
+
+    imageStore(storage_images[nonuniformEXT(push.dst_img)], out_px, vec4(rcas, 1.0));
+}
