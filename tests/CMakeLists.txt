@@ -18,6 +18,7 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bright_pass.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/composite.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/decal.frag
 )
 
 add_executable(vge_tests
@@ -33,6 +34,7 @@ add_executable(vge_tests
     gtao_tests.cpp
     post_tests.cpp
     meshlet_lod_tests.cpp
+    decal_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

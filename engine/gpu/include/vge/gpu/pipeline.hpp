@@ -64,6 +64,9 @@ struct GraphicsPipelineDesc {
     bool depth_write = false;
     VkCompareOp depth_compare = VK_COMPARE_OP_GREATER; // reverse-Z (§3.3)
     VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
+    // Standard alpha blending (src.a * src + (1 - src.a) * dst) on every
+    // color attachment — used by the deferred decal pass (§6.5).
+    bool blend = false;
     std::string debug_name;
 };
 
