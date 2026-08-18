@@ -1,0 +1,19 @@
+# ---- Build output (all CMake presets: debug/release/asan/ubsan/tsan) ----
+build/
+
+# ---- Agent runtime state (daedalus: memory, session scratch, skills cache) ----
+.daedalus*/
+
+# ---- Crash artifacts ----
+core
+core.*
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- Tooling caches ----
+.cache/

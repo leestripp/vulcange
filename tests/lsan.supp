@@ -1,0 +1,20 @@
+# LSan suppressions for third-party DSOs loaded by GLFW's Wayland backend.
+# GLFW loads libdecor's GTK plugin for client-side decorations, which pulls in
+# gtk/glib/gio/pango/glycin — these libraries cache allocations for the process
+# lifetime by design. The Vulkan loader/driver also retain global state.
+# None of these frames are in vulcanGE code; engine-owned leaks still fail.
+leak:libgtk-3.so
+leak:libglib-2.0.so
+leak:libgio-2.0.so
+leak:libpango
+leak:libpangoft2
+leak:libglycin
+leak:libcairo
+leak:libdecor
+leak:libglfw
+leak:libwayland
+leak:libvulkan
+leak:libVkLayer
+# Mesa/driver worker-thread one-time init (dlopen'ed DSO, unresolved module);
+# stack is <unknown module> under pthread_once on a driver thread.
+leak:__pthread_once

@@ -1,0 +1,15 @@
+# TSan suppressions for third-party DSOs pulled in by GLFW's Wayland backend
+# via libdecor-gtk (gtk/glib/gio/pango/glycin run their own worker threads and
+# race internally by design). No vulcanGE frames are suppressed.
+race:libgtk-3.so
+race:libglib-2.0.so
+race:libgio-2.0.so
+race:libpango
+race:libpangoft2
+race:libglycin
+race:libcairo
+race:libdecor
+race:__closedir
+race:libfontconfig
+# Khronos validation layer races internally on queue-submit tracking paths.
+race:libVkLayer_khronos_validation
