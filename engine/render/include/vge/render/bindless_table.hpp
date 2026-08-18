@@ -10,6 +10,7 @@
 //              meshlet descriptors, index data); indexed via push constants
 //   binding 2: combined image sampler[N] — global texture table, indexed by
 //              material push constants with nonuniformEXT
+//   binding 3: storage image[N] — compute pass outputs (Hi-Z pyramid mips)
 //
 // The texture table is update-after-bind + partially-bound + variable-count:
 // indices are handed out linearly each frame; registering overwrites the slot.
@@ -28,6 +29,7 @@ class BindlessTable {
 public:
     static constexpr std::uint32_t frame_ubo_binding = 0;
     static constexpr std::uint32_t storage_binding = 1;
+    static constexpr std::uint32_t storage_image_binding = 3;
     static constexpr std::uint32_t textures_binding = 2;
     static constexpr std::uint32_t default_max_textures = 1024;
     static constexpr std::uint32_t max_buffers = 256;
@@ -53,8 +55,15 @@ public:
     [[nodiscard]] std::uint32_t register_buffer(VkBuffer buffer, VkDeviceSize size,
                                                 VkDeviceSize offset = 0);
 
+    // Registers a storage image (single-mip view) into the next storage image
+    // slot; returns its index.
+    [[nodiscard]] std::uint32_t register_storage_image(VkImageView view);
+
     // Rewinds the buffer index allocator (call once per frame).
     void reset_buffers() noexcept { next_buffer_ = 0; }
+
+    // Rewinds the storage image index allocator (call once per frame).
+    void reset_storage_images() noexcept { next_storage_image_ = 0; }
 
     // Registers a texture into the next table slot; returns its index for
     // push-constant material indexing (§5.3).
@@ -72,6 +81,7 @@ private:
     std::uint32_t max_textures_ = 0;
     std::uint32_t next_texture_ = 0;
     std::uint32_t next_buffer_ = 0;
+    std::uint32_t next_storage_image_ = 0;
 
     void destroy() noexcept;
 };

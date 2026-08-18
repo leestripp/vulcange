@@ -83,7 +83,7 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
     REQUIRE_MESSAGE(dev.has_value(), dev.error().message());
     auto alloc = gpu::Allocator::create(*inst, *dev);
     REQUIRE(alloc.has_value());
-    auto sc = gpu::Swapchain::create(*dev, *surface, {});
+    auto sc = gpu::Swapchain::create(*dev, *surface, {.extent = {320, 240}});
     REQUIRE(sc.has_value());
     const VkExtent2D extent = sc->extent();
 

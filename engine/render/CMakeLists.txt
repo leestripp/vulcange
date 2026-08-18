@@ -2,6 +2,7 @@ add_library(vge_render STATIC
     src/frame_graph.cpp
     src/bindless_table.cpp
     src/meshlet.cpp
+    src/hiz.cpp
 )
 add_library(vge::render ALIAS vge_render)
 target_include_directories(vge_render PUBLIC include)

@@ -20,7 +20,9 @@ layout(set = 0, binding = 0) uniform FrameUBO {
 } ubo;
 
 // All meshlet data buffers are uint arrays in the global buffer table (§5.3).
-layout(set = 0, binding = 1) readonly buffer DataBuf { uint data[]; } buffers[];
+// Writable: the optional stats buffer lives here too.
+layout(set = 0, binding = 1) buffer DataBuf { uint data[]; } buffers[];
+layout(set = 0, binding = 2) uniform sampler2D textures[];
 
 layout(push_constant) uniform Push {
     mat4 model;
@@ -30,6 +32,8 @@ layout(push_constant) uniform Push {
     uint vertex_buf;
     uint vidx_buf;
     uint tidx_buf;
+    uint hiz_tex;   // texture table index of the Hi-Z pyramid, 0xFFFFFFFF = off
+    uint stats_buf; // buffer table index of {tested, emitted} counters, off if ~0
 } push;
 
 taskPayloadSharedEXT struct Payload {
@@ -62,21 +66,55 @@ void main() {
         const vec3 cone_axis = read_vec3(base, 12);
         const float cone_cutoff = uintBitsToFloat(buffers[b].data[base + 11]);
 
-        // Frustum sphere test (world space; model is identity in this test,
-        // cluster DAG transform lands with §7.2).
+        // World-space bounds (uniform scale + translate; cone axis is
+        // rotation-invariant here — full transform lands with §7.2).
+        const vec3 wcenter = (push.model * vec4(center, 1.0)).xyz;
+        const float wradius = radius * length(push.model[0].xyz);
+
+        // Frustum sphere test (world space).
         visible = true;
         for (int i = 0; i < 6; ++i) {
-            if (dot(ubo.frustum_planes[i].xyz, center) + ubo.frustum_planes[i].w < -radius) {
+            if (dot(ubo.frustum_planes[i].xyz, wcenter) + ubo.frustum_planes[i].w < -wradius) {
                 visible = false;
                 break;
             }
         }
         // Backface cone test (meshoptimizer convention).
         if (visible && cone_cutoff < 1.0) {
-            const vec3 dir = center - ubo.camera_pos;
-            if (dot(dir, cone_axis) >= cone_cutoff * length(dir) + radius) {
+            const vec3 dir = wcenter - ubo.camera_pos;
+            if (dot(dir, cone_axis) >= cone_cutoff * length(dir) + wradius) {
                 visible = false;
             }
+        }
+        // Hi-Z occlusion test (§5.3): project the cluster sphere to a screen
+        // rect, sample the pyramid at the covering mip, cull if the cluster's
+        // nearest possible depth is still behind the closest occluder there.
+        if (visible && push.hiz_tex != 0xFFFFFFFFu) {
+            const vec3 center_view = (ubo.view * vec4(wcenter, 1.0)).xyz;
+            const float dist = max(-center_view.z, 1e-4);
+            const float z_near = max(dist - wradius, 1e-4);
+            const vec4 cn = ubo.proj * vec4(0.0, 0.0, -z_near, 1.0);
+            const float depth_near = cn.z / cn.w; // reverse-Z: larger = nearer
+            const vec4 cc = ubo.proj * vec4(center_view, 1.0);
+            const vec2 center_ndc = cc.xy / cc.w;
+            const vec2 half_ndc = vec2(wradius * ubo.proj[0][0], wradius * ubo.proj[1][1]) / dist;
+            // Rect in mip0 texels (half_ndc = 1.0 is half the screen, i.e.
+            // mip0_width texels). Smallest mip whose texel covers the rect:
+            // mip i texel = 2^i mip0 texels, so lod = ceil(log2(rect)).
+            const vec2 mip0_px = vec2(textureSize(textures[nonuniformEXT(push.hiz_tex)], 0));
+            const vec2 rect_px = half_ndc * mip0_px;
+            const float lod = ceil(log2(max(max(rect_px.x, rect_px.y), 1.0)));
+            const float occ = textureLod(textures[nonuniformEXT(push.hiz_tex)],
+                                         center_ndc * 0.5 + 0.5, lod).r;
+            if (depth_near < occ) {
+                visible = false;
+            }
+        }
+    }
+    if (push.stats_buf != 0xFFFFFFFFu && gid < push.meshlet_count) {
+        atomicAdd(buffers[nonuniformEXT(push.stats_buf)].data[0], 1u); // tested
+        if (visible) {
+            atomicAdd(buffers[nonuniformEXT(push.stats_buf)].data[1], 1u); // emitted
         }
     }
 

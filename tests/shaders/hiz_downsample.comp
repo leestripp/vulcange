@@ -1,0 +1,35 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Hi-Z pyramid build (Plan §5.3): dst mip = 2x2 MAX of the source (reverse-Z:
+// larger depth = nearer, so MAX keeps the closest occluder). mip 0 sources the
+// full-res depth buffer; deeper mips source the previous pyramid level.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 2) uniform sampler2D textures[];
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D images[];
+
+layout(push_constant) uniform Push {
+    uint src_tex;
+    uint src_lod;
+    uint dst_img;
+    uint dst_w;
+    uint dst_h;
+} push;
+
+void main() {
+    const ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= int(push.dst_w) || dst.y >= int(push.dst_h)) {
+        return;
+    }
+    const uint s = nonuniformEXT(push.src_tex);
+    const int lod = int(push.src_lod);
+    const ivec2 src_size = textureSize(textures[s], lod);
+    const ivec2 base = dst * 2;
+    float m = texelFetch(textures[s], clamp(base, ivec2(0), src_size - 1), lod).r;
+    m = max(m, texelFetch(textures[s], clamp(base + ivec2(1, 0), ivec2(0), src_size - 1), lod).r);
+    m = max(m, texelFetch(textures[s], clamp(base + ivec2(0, 1), ivec2(0), src_size - 1), lod).r);
+    m = max(m, texelFetch(textures[s], clamp(base + ivec2(1, 1), ivec2(0), src_size - 1), lod).r);
+    imageStore(images[nonuniformEXT(push.dst_img)], dst, vec4(m));
+}

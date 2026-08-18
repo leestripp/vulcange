@@ -97,7 +97,7 @@ TEST_CASE("Swapchain: full chain on Wayland surface" * doctest::skip(!vulkan_ava
     // must be destroyed before their surface, so scope them here. Locals then
     // unwind in order: device, surface, instance, window.
     {
-        auto sc = gpu::Swapchain::create(*dev, *surface, {});
+        auto sc = gpu::Swapchain::create(*dev, *surface, {.extent = {320, 240}});
         REQUIRE_MESSAGE(sc.has_value(), sc.error().message());
         CHECK(sc->image_count() >= 2);
         CHECK(sc->extent().width > 0);
@@ -105,7 +105,7 @@ TEST_CASE("Swapchain: full chain on Wayland surface" * doctest::skip(!vulkan_ava
         CHECK(sc->image_view(0) != VK_NULL_HANDLE);
 
         // Recreation via old-swapchain path (resize handling, §5.4).
-        auto sc2 = gpu::Swapchain::create(*dev, *surface, {}, sc->handle());
+        auto sc2 = gpu::Swapchain::create(*dev, *surface, {.extent = {320, 240}}, sc->handle());
         REQUIRE(sc2.has_value());
         CHECK(sc2->handle() != VK_NULL_HANDLE);
     }

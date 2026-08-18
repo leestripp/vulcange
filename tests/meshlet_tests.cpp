@@ -1,6 +1,9 @@
-// Meshlet pipeline end-to-end (Plan §5.3 / §7.2): UV sphere -> meshopt
-// meshlets -> task shader cluster culling (frustum + backface cone) -> mesh
-// shader -> G-Buffer -> lighting -> present. Readback validates pixels.
+// Meshlet pipeline + Hi-Z occlusion end-to-end (Plan §5.3 / §7.2): two UV
+// spheres (occluder in front, occluded behind) -> meshopt meshlets -> depth
+// prepass -> Hi-Z pyramid build -> task shader cluster culling (frustum +
+// backface cone + Hi-Z occlusion) -> G-Buffer -> lighting -> present.
+// Per-object task stats read back from the GPU prove the occluded sphere is
+// fully culled in the G-Buffer phase.
 
 #include <chrono>
 #include <cmath>
@@ -13,12 +16,15 @@
 #include <vge/platform/window.hpp>
 #include <vge/render/bindless_table.hpp>
 #include <vge/render/frame_graph.hpp>
+#include <vge/render/hiz.hpp>
 #include <vge/render/meshlet.hpp>
 
 using namespace vulcanGE;
 using namespace std::chrono_literals;
 
 namespace {
+
+constexpr std::uint32_t invalid_index = 0xFFFFFFFFu;
 
 [[nodiscard]] bool vulkan_available() {
     return gpu::Instance::create({.enable_validation = false}).has_value();
@@ -29,8 +35,9 @@ struct SphereMesh {
     std::vector<std::uint32_t> indices;
 };
 
-// Y-up UV sphere, radius 1 centered at origin.
-[[nodiscard]] SphereMesh make_uv_sphere(std::uint32_t sectors, std::uint32_t rings) {
+// Y-up UV sphere, pre-transformed to world space (uniform scale + translate).
+[[nodiscard]] SphereMesh make_uv_sphere(std::uint32_t sectors, std::uint32_t rings, float radius,
+                                        float cx, float cy, float cz) {
     SphereMesh m;
     constexpr float pi = 3.14159265358979F;
     for (std::uint32_t r = 0; r <= rings; ++r) {
@@ -42,7 +49,8 @@ struct SphereMesh {
             const float x = rr * std::cos(theta);
             const float z = rr * std::sin(theta);
             m.vertices.insert(m.vertices.end(),
-                              {x, y, z, x, y, z, static_cast<float>(s) / static_cast<float>(sectors),
+                              {cx + radius * x, cy + radius * y, cz + radius * z, x, y, z,
+                               static_cast<float>(s) / static_cast<float>(sectors),
                                static_cast<float>(r) / static_cast<float>(rings)});
         }
     }
@@ -50,7 +58,9 @@ struct SphereMesh {
         for (std::uint32_t s = 0; s < sectors; ++s) {
             const std::uint32_t a = r * (sectors + 1) + s;
             const std::uint32_t b = a + sectors + 1;
-            m.indices.insert(m.indices.end(), {a, b, a + 1, a + 1, b, b + 1});
+            // CCW from outside (theta+ ring+ order): keeps meshopt cone_axis
+            // pointing outward for backface cluster culling.
+            m.indices.insert(m.indices.end(), {a, a + 1, b, a + 1, b + 1, b});
         }
     }
     return m;
@@ -72,6 +82,16 @@ struct MeshletPush {
     std::uint32_t vertex_buf;
     std::uint32_t vidx_buf;
     std::uint32_t tidx_buf;
+    std::uint32_t hiz_tex;
+    std::uint32_t stats_buf;
+};
+
+struct HizBuildPush {
+    std::uint32_t src_tex;
+    std::uint32_t src_lod;
+    std::uint32_t dst_img;
+    std::uint32_t dst_w;
+    std::uint32_t dst_h;
 };
 
 // Gribb-Hartmann plane extraction from a column-major view-proj matrix.
@@ -87,12 +107,12 @@ void extract_frustum(const math::Matrix4x4& vp, float (&planes)[6][4]) {
         set(p, row(3, 0) + sign * row(i, 0), row(3, 1) + sign * row(i, 1),
             row(3, 2) + sign * row(i, 2), row(3, 3) + sign * row(i, 3));
     };
-    combine(0, 0, 1.0F);  // left:   row3 + row0
-    combine(1, 0, -1.0F); // right:  row3 - row0
-    combine(2, 1, 1.0F);  // bottom: row3 + row1
-    combine(3, 1, -1.0F); // top:    row3 - row1
-    set(4, row(2, 0), row(2, 1), row(2, 2), row(2, 3));           // near: row2 (z>=0)
-    combine(5, 2, -1.0F);                                          // far:  row3 - row2
+    combine(0, 0, 1.0F);
+    combine(1, 0, -1.0F);
+    combine(2, 1, 1.0F);
+    combine(3, 1, -1.0F);
+    set(4, row(2, 0), row(2, 1), row(2, 2), row(2, 3)); // near: row2 (z>=0)
+    combine(5, 2, -1.0F);
 }
 
 void set_viewport_scissor(VkCommandBuffer cmd, VkExtent2D e) {
@@ -104,7 +124,7 @@ void set_viewport_scissor(VkCommandBuffer cmd, VkExtent2D e) {
 
 } // namespace
 
-TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
+TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
           doctest::skip(!vulkan_available())) {
     auto win = platform::Window::create({.title = "vge_meshlet_test", .width = 320, .height = 240});
     REQUIRE(win.has_value());
@@ -119,25 +139,29 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
     REQUIRE_MESSAGE(dev->info().features.mesh_shader, "test requires VK_EXT_mesh_shader");
     auto alloc = gpu::Allocator::create(*inst, *dev);
     REQUIRE(alloc.has_value());
-    auto sc = gpu::Swapchain::create(*dev, *surface, {});
+    auto sc = gpu::Swapchain::create(*dev, *surface, {.extent = {320, 240}});
     REQUIRE(sc.has_value());
     const VkExtent2D extent = sc->extent();
 
     auto bindless = render::BindlessTable::create(*dev);
     REQUIRE(bindless.has_value());
 
-    // The distro loader predates VK_EXT_mesh_shader; load the entry point.
     const auto draw_mesh_tasks = reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(
         vkGetDeviceProcAddr(dev->handle(), "vkCmdDrawMeshTasksEXT"));
     REQUIRE(draw_mesh_tasks != nullptr);
 
-    // ---- Meshlet build (meshoptimizer) ----
-    const SphereMesh sphere = make_uv_sphere(64, 32);
-    auto meshlets = render::MeshletSet::create(*alloc, sphere.vertices, sphere.indices, "sphere");
-    REQUIRE_MESSAGE(meshlets.has_value(), meshlets.error().message());
-    MESSAGE("sphere: ", sphere.indices.size() / 3, " tris -> ", meshlets->meshlet_count(),
+    // ---- Geometry: occluder (front) + occluded (behind) ----
+    const SphereMesh occluder = make_uv_sphere(64, 32, 1.0F, 0.0F, 0.0F, 0.8F);
+    const SphereMesh occluded = make_uv_sphere(48, 24, 0.7F, 0.0F, 0.0F, -1.8F);
+    auto mesh_a = render::MeshletSet::create(*alloc, occluder.vertices, occluder.indices, "front");
+    auto mesh_b =
+        render::MeshletSet::create(*alloc, occluded.vertices, occluded.indices, "behind");
+    REQUIRE(mesh_a.has_value());
+    REQUIRE(mesh_b.has_value());
+    MESSAGE("occluder: ", mesh_a->meshlet_count(), " meshlets; occluded: ", mesh_b->meshlet_count(),
             " meshlets");
-    CHECK(meshlets->meshlet_count() > 4); // sanity: real cluster split
+    CHECK(mesh_a->meshlet_count() > 4);
+    CHECK(mesh_b->meshlet_count() > 4);
 
     // ---- Frame constants ----
     auto frame_ubo = gpu::Buffer::create(*alloc, {.size = sizeof(FrameUBO),
@@ -158,7 +182,20 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
     REQUIRE(frame_ubo->write(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(&ubo), sizeof(ubo))));
 
-    // ---- Checker texture (same as deferred test) ----
+    // ---- Stats buffers: {tested, emitted} per object per phase ----
+    constexpr std::size_t stats_count = 4; // prepass A/B, gbuffer A/B
+    std::vector<gpu::Buffer> stats_bufs;
+    for (std::size_t i = 0; i < stats_count; ++i) {
+        auto b = gpu::Buffer::create(*alloc, {.size = 8,
+                                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                              .host_readable = true,
+                                              .debug_name = "cull_stats"});
+        REQUIRE(b.has_value());
+        stats_bufs.push_back(std::move(*b));
+    }
+    const std::array<std::uint32_t, 2> zero_stats{0, 0};
+
+    // ---- Checker texture ----
     constexpr std::uint32_t tex_size = 64;
     std::vector<std::byte> pixels(tex_size * tex_size * 4);
     for (std::uint32_t y = 0; y < tex_size; ++y) {
@@ -183,6 +220,12 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
                                                 .debug_name = "checker_staging"});
     REQUIRE(staging.has_value());
     REQUIRE(staging->write(pixels));
+
+    // ---- Hi-Z pyramid ----
+    auto pyramid = render::HiZPyramid::create(*dev, *alloc, extent.width, extent.height, "hiz");
+    REQUIRE_MESSAGE(pyramid.has_value(), pyramid.error().message());
+    MESSAGE("hiz: ", pyramid->mip_count(), " mips, base ",
+            pyramid->mip_extent(0).width, "x", pyramid->mip_extent(0).height);
 
     auto pool = gpu::CommandPool::create(*dev, dev->info().queues.graphics);
     REQUIRE(pool.has_value());
@@ -249,9 +292,11 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
     const VkSamplerCreateInfo sampler_ci{
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
         .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
-        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT};
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .maxLod = 16.0F};
     VkSampler sampler = VK_NULL_HANDLE;
     REQUIRE(vkCreateSampler(dev->handle(), &sampler_ci, nullptr, &sampler) == VK_SUCCESS);
 
@@ -269,6 +314,7 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
     auto fullscreen_vs = load_module("fullscreen.vert.spv");
     auto lighting_fs = load_module("lighting.frag.spv");
     auto present_fs = load_module("present.frag.spv");
+    auto hiz_cs = load_module("hiz_downsample.comp.spv");
 
     const VkPushConstantRange meshlet_push_range{
         .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
@@ -278,6 +324,8 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 12};
     const VkPushConstantRange present_push_range{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 4};
+    const VkPushConstantRange hiz_push_range{
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .offset = 0, .size = sizeof(HizBuildPush)};
 
     auto prepass_pipeline = gpu::GraphicsPipeline::create(
         *dev, {.task = &task_shader, .mesh = &mesh_shader,
@@ -320,6 +368,13 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
                .debug_name = "present"});
     REQUIRE(present_pipeline.has_value());
 
+    auto hiz_pipeline = gpu::ComputePipeline::create(
+        *dev, {.shader = &hiz_cs,
+               .set_layouts = {bindless->layout()},
+               .push_constant_ranges = {hiz_push_range},
+               .debug_name = "hiz_build"});
+    REQUIRE_MESSAGE(hiz_pipeline.has_value(), hiz_pipeline.error().message());
+
     // ---- Frame loop ----
     auto acquire_sem = gpu::Semaphore::create(*dev);
     REQUIRE(acquire_sem.has_value());
@@ -332,33 +387,46 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
     std::vector<bool> image_presented(sc->image_count(), false);
 
     const math::Matrix4x4 model = math::Matrix4x4::identity();
-    const std::uint32_t task_groups = (meshlets->meshlet_count() + 31) / 32;
     render::FrameGraph fg;
     render::TextureHandle scene_color = render::invalid_texture;
 
-    auto draw_meshlets = [&](const render::PassContext& ctx, const gpu::GraphicsPipeline& pipe,
-                             std::uint32_t texture_index) {
+    auto draw_object = [&](const render::PassContext& ctx, const gpu::GraphicsPipeline& pipe,
+                           const render::MeshletSet& mesh, std::uint32_t buf_base,
+                           std::uint32_t hiz_tex, std::uint32_t stats_buf) {
+        MeshletPush push{};
+        std::memcpy(push.model, model.cols, sizeof(push.model));
+        push.texture_index = 0; // checker
+        push.meshlet_count = mesh.meshlet_count();
+        push.meshlet_buf = buf_base + 0;
+        push.vertex_buf = buf_base + 1;
+        push.vidx_buf = buf_base + 2;
+        push.tidx_buf = buf_base + 3;
+        push.hiz_tex = hiz_tex;
+        push.stats_buf = stats_buf;
+        vkCmdPushConstants(ctx.cmd, pipe.layout(),
+                           VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
+                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(push), &push);
+        draw_mesh_tasks(ctx.cmd, (mesh.meshlet_count() + 31) / 32, 1, 1);
+    };
+
+    auto bind_and_draw = [&](const render::PassContext& ctx, const gpu::GraphicsPipeline& pipe,
+                             std::uint32_t hiz_tex, std::uint32_t stats_base) {
         set_viewport_scissor(ctx.cmd, extent);
         vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe.handle());
         const VkDescriptorSet set = bindless->set();
         vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe.layout(), 0, 1,
                                 &set, 0, nullptr);
-        MeshletPush push{};
-        std::memcpy(push.model, model.cols, sizeof(push.model));
-        push.texture_index = texture_index;
-        push.meshlet_count = meshlets->meshlet_count();
-        push.meshlet_buf = 0;
-        push.vertex_buf = 1;
-        push.vidx_buf = 2;
-        push.tidx_buf = 3;
-        vkCmdPushConstants(ctx.cmd, pipe.layout(),
-                           VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(push), &push);
-        draw_mesh_tasks(ctx.cmd, task_groups, 1, 1);
+        draw_object(ctx, pipe, *mesh_a, 0, hiz_tex, stats_base);
+        draw_object(ctx, pipe, *mesh_b, 4, hiz_tex, stats_base + 1);
     };
 
     for (int frame = 0; frame < 3; ++frame) {
+        for (auto& b : stats_bufs) {
+            REQUIRE(b.write(std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(zero_stats.data()), sizeof(zero_stats))));
+        }
+
         std::uint32_t image_index = 0;
         const VkResult ar =
             vkAcquireNextImageKHR(dev->handle(), sc->handle(), UINT64_MAX,
@@ -388,15 +456,24 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
                                                  : VK_IMAGE_LAYOUT_UNDEFINED);
         image_presented[image_index] = true;
 
+        // Pass 1: depth prepass, frustum+cone culling only (no Hi-Z yet).
         const render::Attachment depth_clear{
             .texture = depth, .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .store_op = VK_ATTACHMENT_STORE_OP_STORE,
             .clear = {.depthStencil = {.depth = 0.0F}}};
         fg.add_graphics_pass("meshlet_prepass", {}, {}, depth_clear,
                              [&](const render::PassContext& ctx) {
-                                 draw_meshlets(ctx, *prepass_pipeline, 0);
+                                 bind_and_draw(ctx, *prepass_pipeline, invalid_index, 8);
                              });
 
+        // Hi-Z build: compute pass reading the fresh depth buffer.
+        fg.add_compute_pass("hiz_build", {&depth, 1}, {},
+                            [&](const render::PassContext& ctx) {
+                                pyramid->record_build(ctx.cmd, *hiz_pipeline, *bindless,
+                                                      fg.texture_view(depth), sampler);
+                            });
+
+        // Pass 2: G-Buffer with Hi-Z occlusion culling.
         const std::array gbuffer_atts{
             render::Attachment{.texture = gb_normal, .clear = {.color = {{0, 0, 0, 0}}}},
             render::Attachment{.texture = gb_albedo, .clear = {.color = {{0, 0, 0, 0}}}},
@@ -407,7 +484,9 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
             .store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE};
         fg.add_graphics_pass("meshlet_gbuffer", {}, gbuffer_atts, depth_load,
                              [&](const render::PassContext& ctx) {
-                                 draw_meshlets(ctx, *gbuffer_pipeline, 0);
+                                 const std::uint32_t hiz_tex =
+                                     bindless->register_texture(pyramid->full_view(), sampler);
+                                 bind_and_draw(ctx, *gbuffer_pipeline, hiz_tex, 10);
                              });
 
         const std::array lighting_reads{gb_normal, gb_albedo, gb_material};
@@ -451,18 +530,27 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
         auto compiled = fg.compile(*alloc);
         REQUIRE_MESSAGE(compiled.has_value(), compiled.error().message());
 
+        // Descriptor registrations (indices are pushed in the draw callbacks).
         bindless->reset_buffers();
         bindless->reset_textures();
-        CHECK(bindless->register_buffer(meshlets->meshlet_buffer(),
-                                        meshlets->meshlet_count() * sizeof(render::GpuMeshlet)) ==
-              0);
-        CHECK(bindless->register_buffer(meshlets->vertex_buffer(),
-                                        meshlets->vertex_count() * render::vertex_floats *
-                                            sizeof(float)) == 1);
-        CHECK(bindless->register_buffer(meshlets->vertex_indices_buffer(),
-                                        VK_WHOLE_SIZE) == 2);
-        CHECK(bindless->register_buffer(meshlets->triangle_indices_buffer(),
-                                        VK_WHOLE_SIZE) == 3);
+        bindless->reset_storage_images();
+        auto reg_mesh = [&](const render::MeshletSet& m, std::uint32_t base) {
+            CHECK(bindless->register_buffer(m.meshlet_buffer(),
+                                            m.meshlet_count() * sizeof(render::GpuMeshlet)) ==
+                  base);
+            CHECK(bindless->register_buffer(m.vertex_buffer(),
+                                            m.vertex_count() * render::vertex_floats *
+                                                sizeof(float)) == base + 1);
+            CHECK(bindless->register_buffer(m.vertex_indices_buffer(), VK_WHOLE_SIZE) ==
+                  base + 2);
+            CHECK(bindless->register_buffer(m.triangle_indices_buffer(), VK_WHOLE_SIZE) ==
+                  base + 3);
+        };
+        reg_mesh(*mesh_a, 0);
+        reg_mesh(*mesh_b, 4);
+        for (std::size_t i = 0; i < stats_count; ++i) {
+            CHECK(bindless->register_buffer(stats_bufs[i].handle(), 8) == 8 + i);
+        }
         CHECK(bindless->register_texture(checker->view(), sampler) == 0);
         CHECK(bindless->register_texture(fg.texture_view(gb_normal), sampler) == 1);
         CHECK(bindless->register_texture(fg.texture_view(gb_albedo), sampler) == 2);
@@ -508,6 +596,30 @@ TEST_CASE("Meshlets: task/mesh shader sphere through deferred chain" *
         const VkResult pr = vkQueuePresentKHR(dev->graphics_queue(), &present_info);
         CHECK((pr == VK_SUCCESS || pr == VK_SUBOPTIMAL_KHR));
     }
+
+    // ---- Culling stats: the occluded sphere must emit nothing in the
+    // Hi-Z-culled G-Buffer phase while the occluder still draws. ----
+    auto read_stats = [&](std::size_t i) {
+        stats_bufs[i].invalidate();
+        std::array<std::uint32_t, 2> v{};
+        std::memcpy(v.data(), stats_bufs[i].mapped(), sizeof(v));
+        return v;
+    };
+    const auto pA = read_stats(0);
+    const auto pB = read_stats(1);
+    const auto gA = read_stats(2);
+    const auto gB = read_stats(3);
+    MESSAGE("prepass  A: tested=", pA[0], " emitted=", pA[1]);
+    MESSAGE("prepass  B: tested=", pB[0], " emitted=", pB[1]);
+    MESSAGE("gbuffer  A: tested=", gA[0], " emitted=", gA[1]);
+    MESSAGE("gbuffer  B: tested=", gB[0], " emitted=", gB[1]);
+    CHECK(pA[0] == mesh_a->meshlet_count());
+    CHECK(pB[0] == mesh_b->meshlet_count());
+    CHECK(pA[1] > 0);            // occluder draws in prepass
+    CHECK(pB[1] > 0);            // occluded sphere draws in prepass (no Hi-Z yet)
+    CHECK(gA[1] > 0);            // occluder survives Hi-Z
+    CHECK(gB[1] == 0);           // occluded sphere fully culled by Hi-Z
+    CHECK(gA[1] <= pA[1]);       // occlusion never emits more than prepass
 
     // ---- Readback ----
     auto readback = gpu::Buffer::create(

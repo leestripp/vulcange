@@ -247,4 +247,91 @@ GraphicsPipeline& GraphicsPipeline::operator=(GraphicsPipeline&& o) noexcept {
     return *this;
 }
 
+
+std::expected<ComputePipeline, Error> ComputePipeline::create(const Device& device,
+                                                              const ComputePipelineDesc& desc) {
+    if (desc.shader == nullptr) {
+        return std::unexpected(make_error(GpuError::pipeline_creation_failed,
+                                          VK_ERROR_INITIALIZATION_FAILED,
+                                          "compute shader is required"));
+    }
+
+    const VkPipelineLayoutCreateInfo layout_ci{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = static_cast<std::uint32_t>(desc.set_layouts.size()),
+        .pSetLayouts = desc.set_layouts.data(),
+        .pushConstantRangeCount =
+            static_cast<std::uint32_t>(desc.push_constant_ranges.size()),
+        .pPushConstantRanges = desc.push_constant_ranges.data(),
+    };
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    if (const VkResult r =
+            vkCreatePipelineLayout(device.handle(), &layout_ci, nullptr, &layout);
+        r != VK_SUCCESS) {
+        return std::unexpected(
+            make_error(GpuError::pipeline_creation_failed, r, "vkCreatePipelineLayout failed"));
+    }
+
+    const VkComputePipelineCreateInfo ci{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                  .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                  .module = desc.shader->handle(),
+                  .pName = desc.shader->entry_point().c_str()},
+        .layout = layout,
+    };
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (const VkResult r = vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &ci,
+                                                    nullptr, &pipeline);
+        r != VK_SUCCESS) {
+        vkDestroyPipelineLayout(device.handle(), layout, nullptr);
+        return std::unexpected(
+            make_error(GpuError::pipeline_creation_failed, r, "vkCreateComputePipelines failed"));
+    }
+    if (!desc.debug_name.empty()) {
+        device.set_object_name(VK_OBJECT_TYPE_PIPELINE,
+                               reinterpret_cast<std::uint64_t>(pipeline), desc.debug_name);
+    }
+
+    ComputePipeline out;
+    out.device_ = device.handle();
+    out.pipeline_ = pipeline;
+    out.layout_ = layout;
+    return out;
+}
+
+ComputePipeline::~ComputePipeline() { destroy(); }
+
+ComputePipeline::ComputePipeline(ComputePipeline&& o) noexcept
+    : device_(o.device_), pipeline_(o.pipeline_), layout_(o.layout_) {
+    o.pipeline_ = VK_NULL_HANDLE;
+    o.layout_ = VK_NULL_HANDLE;
+}
+
+ComputePipeline& ComputePipeline::operator=(ComputePipeline&& o) noexcept {
+    if (this != &o) {
+        destroy();
+        device_ = o.device_;
+        pipeline_ = o.pipeline_;
+        layout_ = o.layout_;
+        o.pipeline_ = VK_NULL_HANDLE;
+        o.layout_ = VK_NULL_HANDLE;
+    }
+    return *this;
+}
+
+void ComputePipeline::destroy() noexcept {
+    if (device_ != VK_NULL_HANDLE) {
+        if (pipeline_ != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_, pipeline_, nullptr);
+        }
+        if (layout_ != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(device_, layout_, nullptr);
+        }
+    }
+    pipeline_ = VK_NULL_HANDLE;
+    layout_ = VK_NULL_HANDLE;
+}
+
 } // namespace vulcanGE::gpu
+

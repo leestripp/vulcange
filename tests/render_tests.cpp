@@ -35,7 +35,7 @@ TEST_CASE("FrameGraph: clear + triangle to swapchain, 3 frames" *
     REQUIRE_MESSAGE(dev.has_value(), dev.error().message());
     auto alloc = gpu::Allocator::create(*inst, *dev);
     REQUIRE_MESSAGE(alloc.has_value(), alloc.error().message());
-    auto sc = gpu::Swapchain::create(*dev, *surface, {});
+    auto sc = gpu::Swapchain::create(*dev, *surface, {.extent = {320, 240}});
     REQUIRE_MESSAGE(sc.has_value(), sc.error().message());
 
     // Shaders (compiled at build time by glslangValidator, cmake/VgeShaders.cmake).

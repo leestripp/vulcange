@@ -9,6 +9,7 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/present.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/meshlet.task
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/meshlet.mesh
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hiz_downsample.comp
 )
 
 add_executable(vge_tests

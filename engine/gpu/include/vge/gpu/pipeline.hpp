@@ -67,6 +67,36 @@ struct GraphicsPipelineDesc {
     std::string debug_name;
 };
 
+struct ComputePipelineDesc {
+    const ShaderModule* shader = nullptr; // required
+    std::vector<VkDescriptorSetLayout> set_layouts;
+    std::vector<VkPushConstantRange> push_constant_ranges;
+    std::string debug_name;
+};
+
+class ComputePipeline {
+public:
+    ComputePipeline() = default;
+    ~ComputePipeline();
+    ComputePipeline(const ComputePipeline&) = delete;
+    ComputePipeline& operator=(const ComputePipeline&) = delete;
+    ComputePipeline(ComputePipeline&& o) noexcept;
+    ComputePipeline& operator=(ComputePipeline&& o) noexcept;
+
+    [[nodiscard]] static std::expected<ComputePipeline, Error>
+    create(const Device& device, const ComputePipelineDesc& desc);
+
+    [[nodiscard]] VkPipeline handle() const noexcept { return pipeline_; }
+    [[nodiscard]] VkPipelineLayout layout() const noexcept { return layout_; }
+
+private:
+    VkDevice device_ = VK_NULL_HANDLE; // borrowed from Device (outlives us)
+    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+
+    void destroy() noexcept;
+};
+
 class GraphicsPipeline {
 public:
     GraphicsPipeline() = default;
