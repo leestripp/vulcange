@@ -15,6 +15,9 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cluster_lights.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gtao.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gtao_blur.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bright_pass.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/composite.frag
 )
 
 add_executable(vge_tests
@@ -28,6 +31,7 @@ add_executable(vge_tests
     shadow_tests.cpp
     clustered_tests.cpp
     gtao_tests.cpp
+    post_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

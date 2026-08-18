@@ -1,0 +1,37 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Bloom bright-pass (Plan §5.2 post pipeline): half-res threshold extract
+// from the HDR scene. Soft-knee threshold to avoid hard cutoffs.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 2) uniform sampler2D textures[];
+layout(set = 0, binding = 3, r16f) writeonly uniform image2D storage_images[];
+
+layout(push_constant) uniform Push {
+    uint scene_tex;
+    uint dst_img;
+    uint full_w;
+    uint full_h;
+    float threshold;
+    float knee;
+    uint pad0;
+    uint pad1;
+} push;
+
+void main() {
+    const ivec2 half_px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 full_px = min(half_px * 2 + 1, ivec2(int(push.full_w) - 1, int(push.full_h) - 1));
+    const vec3 c = texelFetch(textures[nonuniformEXT(push.scene_tex)], full_px, 0).rgb;
+
+    // Soft-knee brightness threshold (CoD/UE4 convention).
+    const float brightness = max(c.r, max(c.g, c.b));
+    const float soft = clamp(brightness - push.threshold + push.knee, 0.0, 2.0 * push.knee);
+    const float contribution =
+        max(soft * soft / (4.0 * push.knee), brightness - push.threshold) /
+        max(brightness, 1e-4);
+
+    imageStore(storage_images[nonuniformEXT(push.dst_img)], half_px,
+               vec4(c * max(contribution, 0.0), 1.0));
+}

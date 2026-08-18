@@ -1,0 +1,39 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Bloom separable gaussian blur (9-tap, half-res; no edge weights — bloom
+// bleeds across silhouettes by design).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 2) uniform sampler2D textures[];
+layout(set = 0, binding = 3, r16f) writeonly uniform image2D storage_images[];
+
+layout(push_constant) uniform Push {
+    uint src_tex;
+    uint dst_img;
+    uint axis;   // 0 = horizontal, 1 = vertical
+    uint half_w;
+    uint half_h;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} push;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = ivec2(int(push.half_w), int(push.half_h));
+    const ivec2 step = push.axis == 0u ? ivec2(1, 0) : ivec2(0, 1);
+    const float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.0162162};
+
+    vec3 sum = texelFetch(textures[nonuniformEXT(push.src_tex)], clamp(px, ivec2(0), size - 1),
+                          0).rgb *
+               weights[0];
+    for (int i = 1; i < 5; ++i) {
+        const ivec2 a = clamp(px + step * i, ivec2(0), size - 1);
+        const ivec2 b = clamp(px - step * i, ivec2(0), size - 1);
+        sum += texelFetch(textures[nonuniformEXT(push.src_tex)], a, 0).rgb * weights[i];
+        sum += texelFetch(textures[nonuniformEXT(push.src_tex)], b, 0).rgb * weights[i];
+    }
+    imageStore(storage_images[nonuniformEXT(push.dst_img)], px, vec4(sum, 1.0));
+}
