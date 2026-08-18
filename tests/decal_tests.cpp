@@ -322,7 +322,7 @@ TEST_CASE("Decal: box projection paints the ground red" *
                .push_constant_ranges = {decal_push_range},
                .color_formats = {VK_FORMAT_R8G8B8A8_UNORM},
                .cull_mode = VK_CULL_MODE_NONE,
-               .blend = true,
+               .blend = gpu::BlendMode::alpha,
                .debug_name = "decal"});
     REQUIRE_MESSAGE(decal_pipeline.has_value(), decal_pipeline.error().message());
 

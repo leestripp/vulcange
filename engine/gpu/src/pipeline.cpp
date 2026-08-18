@@ -160,13 +160,17 @@ GraphicsPipeline::create(const Device& device, const GraphicsPipelineDesc& desc)
         .depthWriteEnable = static_cast<VkBool32>(desc.depth_write),
         .depthCompareOp = desc.depth_compare,
     };
-    const VkPipelineColorBlendAttachmentState blend_attachment{
-        .blendEnable = static_cast<VkBool32>(desc.blend),
+    VkPipelineColorBlendAttachmentState blend_attachment{
+        .blendEnable = static_cast<VkBool32>(desc.blend != BlendMode::none),
         .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .dstColorBlendFactor = desc.blend == BlendMode::additive
+                                   ? VK_BLEND_FACTOR_ONE
+                                   : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
         .colorBlendOp = VK_BLEND_OP_ADD,
         .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .dstAlphaBlendFactor = desc.blend == BlendMode::additive
+                                   ? VK_BLEND_FACTOR_ONE
+                                   : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
         .alphaBlendOp = VK_BLEND_OP_ADD,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,

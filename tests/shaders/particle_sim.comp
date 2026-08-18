@@ -1,0 +1,65 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// GPU particle simulation (Plan §5.7 foundation): per-particle integration
+// with gravity and deterministic respawn at the emitter. Particles live in a
+// storage buffer (8 uints: pos.xyz, life, vel.xyz, seed).
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1) buffer DataBuf { uint data[]; } buffers[];
+
+layout(push_constant) uniform Push {
+    uint particle_buf;
+    uint particle_count;
+    float dt;
+    float time;      // global sim time for respawn jitter
+    vec3 emitter;
+    uint pad0;
+} push;
+
+float hash1(uint x) {
+    x = x * 747796405u + 2891336453u;
+    x = ((x >> ((x >> 28) + 4u)) ^ x) * 277803737u;
+    return float((x >> 22) ^ x) * (1.0 / 4294967296.0);
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= push.particle_count) {
+        return;
+    }
+    const uint pb = nonuniformEXT(push.particle_buf);
+    const uint base = i * 8;
+
+    vec3 pos = vec3(uintBitsToFloat(buffers[pb].data[base + 0]),
+                    uintBitsToFloat(buffers[pb].data[base + 1]),
+                    uintBitsToFloat(buffers[pb].data[base + 2]));
+    float life = uintBitsToFloat(buffers[pb].data[base + 3]);
+    vec3 vel = vec3(uintBitsToFloat(buffers[pb].data[base + 4]),
+                    uintBitsToFloat(buffers[pb].data[base + 5]),
+                    uintBitsToFloat(buffers[pb].data[base + 6]));
+
+    life -= push.dt;
+    if (life <= 0.0) {
+        // Respawn at the emitter with upward-biased jitter velocity.
+        const uint s = i * 1664525u + uint(push.time * 997.0) * 1013904223u;
+        const float a = hash1(s) * 6.2831853;
+        const float r = 0.2 + 0.5 * hash1(s + 1u);
+        const float up = 1.5 + 1.0 * hash1(s + 2u);
+        pos = push.emitter + vec3(cos(a) * 0.1, 0.0, sin(a) * 0.1);
+        vel = vec3(cos(a) * r, up, sin(a) * r);
+        life = 1.0 + hash1(s + 3u);
+    } else {
+        vel.y -= 2.0 * push.dt; // gravity (lighter than 9.81 for a slow fountain)
+        pos += vel * push.dt;
+    }
+
+    buffers[pb].data[base + 0] = floatBitsToUint(pos.x);
+    buffers[pb].data[base + 1] = floatBitsToUint(pos.y);
+    buffers[pb].data[base + 2] = floatBitsToUint(pos.z);
+    buffers[pb].data[base + 3] = floatBitsToUint(life);
+    buffers[pb].data[base + 4] = floatBitsToUint(vel.x);
+    buffers[pb].data[base + 5] = floatBitsToUint(vel.y);
+    buffers[pb].data[base + 6] = floatBitsToUint(vel.z);
+}

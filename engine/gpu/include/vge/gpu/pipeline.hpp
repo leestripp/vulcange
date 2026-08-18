@@ -48,6 +48,8 @@ private:
     void destroy() noexcept;
 };
 
+enum class BlendMode : std::uint8_t { none, alpha, additive };
+
 struct GraphicsPipelineDesc {
     // Classic path: vertex is required (mesh/task must be null).
     // Mesh shader path (Plan §5.3 primary): mesh required, task optional
@@ -64,9 +66,10 @@ struct GraphicsPipelineDesc {
     bool depth_write = false;
     VkCompareOp depth_compare = VK_COMPARE_OP_GREATER; // reverse-Z (§3.3)
     VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
-    // Standard alpha blending (src.a * src + (1 - src.a) * dst) on every
-    // color attachment — used by the deferred decal pass (§6.5).
-    bool blend = false;
+    // Per-attachment blending mode (all color attachments share it).
+    // alpha: src.a*src + (1-src.a)*dst (deferred decals §6.5)
+    // additive: src.a*src + dst (particles/glow §5.7)
+    BlendMode blend = BlendMode::none;
     std::string debug_name;
 };
 
