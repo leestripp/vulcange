@@ -31,7 +31,7 @@ layout(push_constant) uniform Push {
     uint cluster_buf; // froxel cluster light lists, 0xFFFFFFFF = clustered off
     uint lights_buf;  // point light array, 8 uints per light
     uint light_count;
-    uint pad;
+    uint ao_idx;      // half-res AO texture, 0xFFFFFFFF = AO off
 } push;
 
 layout(location = 0) out vec4 out_color;
@@ -62,7 +62,8 @@ void main() {
     vec2 screen = vec2(1.0);
     vec3 world = vec3(0.0);
     float view_dist = 0.0;
-    const bool need_world = push.shadow_idx != 0xFFFFFFFFu || push.cluster_buf != 0xFFFFFFFFu;
+    const bool need_world = push.shadow_idx != 0xFFFFFFFFu || push.cluster_buf != 0xFFFFFFFFu ||
+                            push.ao_idx != 0xFFFFFFFFu;
     if (need_world) {
         screen = vec2(textureSize(textures[nonuniformEXT(push.depth_idx)], 0));
         const float depth = texelFetch(textures[nonuniformEXT(push.depth_idx)], px, 0).r;
@@ -145,6 +146,13 @@ void main() {
         }
     }
 
-    const vec3 ambient = vec3(0.08);
+    // Ground-truth AO (Plan §6.3): modulates ambient (and baked material AO
+    // once materials land).
+    float ao = 1.0;
+    if (push.ao_idx != 0xFFFFFFFFu) {
+        ao = texture(textures[nonuniformEXT(push.ao_idx)], gl_FragCoord.xy / screen).r;
+    }
+
+    const vec3 ambient = vec3(0.08) * ao;
     out_color = vec4(albedo_rough.rgb * (ambient + vec3(ndl * shadow) + point_light), 1.0);
 }

@@ -87,7 +87,7 @@ struct LightingPush {
     std::uint32_t cluster_buf;
     std::uint32_t lights_buf;
     std::uint32_t light_count;
-    std::uint32_t pad;
+    std::uint32_t ao_idx;
 };
 
 constexpr std::uint32_t invalid_index = 0xFFFFFFFFu;
@@ -598,6 +598,7 @@ TEST_CASE("Clustered: colored point lights localized by froxel grid" *
         lighting_push.cluster_buf = 5;
         lighting_push.lights_buf = 4;
         lighting_push.light_count = lights.size();
+        lighting_push.ao_idx = invalid_index; // AO off
         bindless->bind_frame_ubo(frame_ubo->handle(), sizeof(FrameUBO));
 
         pool->reset();

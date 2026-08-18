@@ -122,7 +122,7 @@ struct LightingPush {
     std::uint32_t cluster_buf;
     std::uint32_t lights_buf;
     std::uint32_t light_count;
-    std::uint32_t pad;
+    std::uint32_t ao_idx;
 };
 
 constexpr std::uint32_t invalid_index = 0xFFFFFFFFu;
@@ -661,6 +661,7 @@ TEST_CASE("CSM: sphere shadow on ground plane through deferred chain" *
         lighting_push.cluster_buf = invalid_index; // clustered lights off
         lighting_push.lights_buf = invalid_index;
         lighting_push.light_count = 0;
+        lighting_push.ao_idx = invalid_index; // AO off
         bindless->bind_frame_ubo(frame_ubo->handle(), sizeof(FrameUBO));
 
         pool->reset();

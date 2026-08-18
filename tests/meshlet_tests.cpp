@@ -507,7 +507,7 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
         //  light_buf, splits}
                                  const std::uint32_t idx[14] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
                                                                 0xFFFFFFFFu, 0, 0xFFFFFFFFu,
-                                                                0xFFFFFFFFu, 0, 0};
+                                                                0xFFFFFFFFu, 0, 0xFFFFFFFFu};
                                  vkCmdPushConstants(ctx.cmd, lighting_pipeline->layout(),
                                                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(idx),
                                                     idx);
