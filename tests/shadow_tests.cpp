@@ -119,6 +119,10 @@ struct LightingPush {
     std::uint32_t depth_idx;
     std::uint32_t shadow_idx;
     std::uint32_t light_buf;
+    std::uint32_t cluster_buf;
+    std::uint32_t lights_buf;
+    std::uint32_t light_count;
+    std::uint32_t pad;
 };
 
 constexpr std::uint32_t invalid_index = 0xFFFFFFFFu;
@@ -654,6 +658,9 @@ TEST_CASE("CSM: sphere shadow on ground plane through deferred chain" *
         lighting_push.depth_idx = 6;
         lighting_push.shadow_idx = 7;
         lighting_push.light_buf = 8;
+        lighting_push.cluster_buf = invalid_index; // clustered lights off
+        lighting_push.lights_buf = invalid_index;
+        lighting_push.light_count = 0;
         bindless->bind_frame_ubo(frame_ubo->handle(), sizeof(FrameUBO));
 
         pool->reset();

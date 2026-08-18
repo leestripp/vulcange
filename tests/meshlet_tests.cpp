@@ -323,7 +323,7 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
                       VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0, .size = sizeof(MeshletPush)};
     const VkPushConstantRange lighting_push_range{
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 40};
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 56};
     const VkPushConstantRange present_push_range{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 4};
     const VkPushConstantRange hiz_push_range{
@@ -505,8 +505,9 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
                                                          0, nullptr);
                                  // {gbuffer idx x3, depth, shadow(off),
         //  light_buf, splits}
-                                 const std::uint32_t idx[10] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
-                                                                0xFFFFFFFFu, 0};
+                                 const std::uint32_t idx[14] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0, 0};
                                  vkCmdPushConstants(ctx.cmd, lighting_pipeline->layout(),
                                                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(idx),
                                                     idx);

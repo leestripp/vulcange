@@ -97,7 +97,9 @@ void main() {
             const float depth_near = cn.z / cn.w; // reverse-Z: larger = nearer
             const vec4 cc = ubo.proj * vec4(center_view, 1.0);
             const vec2 center_ndc = cc.xy / cc.w;
-            const vec2 half_ndc = vec2(wradius * ubo.proj[0][0], wradius * ubo.proj[1][1]) / dist;
+            // abs(): proj[1][1] is negative (baked Vulkan Y-flip).
+            const vec2 half_ndc =
+                vec2(wradius * abs(ubo.proj[0][0]), wradius * abs(ubo.proj[1][1])) / dist;
             // Rect in mip0 texels (half_ndc = 1.0 is half the screen, i.e.
             // mip0_width texels). Smallest mip whose texel covers the rect:
             // mip i texel = 2^i mip0 texels, so lod = ceil(log2(rect)).

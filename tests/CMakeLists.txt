@@ -12,6 +12,7 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hiz_downsample.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.task
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.mesh
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cluster_lights.comp
 )
 
 add_executable(vge_tests
@@ -23,6 +24,7 @@ add_executable(vge_tests
     deferred_tests.cpp
     meshlet_tests.cpp
     shadow_tests.cpp
+    clustered_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

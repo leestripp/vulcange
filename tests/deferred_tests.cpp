@@ -235,7 +235,7 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0, .size = sizeof(MeshPush)};
     const VkPushConstantRange lighting_push_range{
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 40};
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 56};
     const VkPushConstantRange present_push_range{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 4};
 
@@ -390,8 +390,9 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
                                  vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                          lighting_pipeline->layout(), 0, 1, &set,
                                                          0, nullptr);
-                                 const std::uint32_t idx[10] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
-                                                                0xFFFFFFFFu, 0};
+                                 const std::uint32_t idx[14] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0, 0};
                                  vkCmdPushConstants(ctx.cmd, lighting_pipeline->layout(),
                                                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(idx),
                                                     idx);

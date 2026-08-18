@@ -26,8 +26,12 @@ layout(push_constant) uniform Push {
     uint albedo_idx;
     uint material_idx;
     uint depth_idx;
-    uint shadow_idx; // shadow atlas, 0xFFFFFFFF = shadows off
-    uint light_buf;  // per-cascade {light_vp, planes} block, 40 uints each
+    uint shadow_idx;  // shadow atlas, 0xFFFFFFFF = shadows off
+    uint light_buf;   // per-cascade {light_vp, planes} block, 40 uints each
+    uint cluster_buf; // froxel cluster light lists, 0xFFFFFFFF = clustered off
+    uint lights_buf;  // point light array, 8 uints per light
+    uint light_count;
+    uint pad;
 } push;
 
 layout(location = 0) out vec4 out_color;
@@ -52,16 +56,24 @@ void main() {
     const vec3 L = normalize(-ubo.light_dir);
     const float ndl = max(dot(N, L), 0.0);
 
-    float shadow = 1.0;
-    if (push.shadow_idx != 0xFFFFFFFFu) {
-        // World position from depth (infinite reverse-Z: ndc z = near / d).
-        const vec2 screen = vec2(textureSize(textures[nonuniformEXT(push.depth_idx)], 0));
+    // World position from depth (infinite reverse-Z: ndc z = near / d).
+    // Shared by shadow sampling and clustered lights; evaluated only when at
+    // least one of them is enabled (depth_idx is invalid otherwise).
+    vec2 screen = vec2(1.0);
+    vec3 world = vec3(0.0);
+    float view_dist = 0.0;
+    const bool need_world = push.shadow_idx != 0xFFFFFFFFu || push.cluster_buf != 0xFFFFFFFFu;
+    if (need_world) {
+        screen = vec2(textureSize(textures[nonuniformEXT(push.depth_idx)], 0));
         const float depth = texelFetch(textures[nonuniformEXT(push.depth_idx)], px, 0).r;
         const vec2 ndc_xy = (gl_FragCoord.xy / screen) * 2.0 - 1.0;
         const vec4 wp = ubo.inv_view_proj * vec4(ndc_xy, depth, 1.0);
-        const vec3 world = wp.xyz / wp.w;
-        const float view_dist = ubo.proj[3][2] / max(depth, 1e-6); // proj[3][2] = z_near
+        world = wp.xyz / wp.w;
+        view_dist = ubo.proj[3][2] / max(depth, 1e-6); // proj[3][2] = z_near
+    }
 
+    float shadow = 1.0;
+    if (push.shadow_idx != 0xFFFFFFFFu) {
         uint cascade = 3;
         for (uint i = 0; i < 4; ++i) {
             if (view_dist <= push.splits[i]) {
@@ -100,6 +112,39 @@ void main() {
         shadow = lit / 9.0;
     }
 
+    // Clustered point lights (Plan §5.2): look up this pixel's froxel and
+    // accumulate its light list with smooth distance falloff.
+    vec3 point_light = vec3(0.0);
+    if (push.cluster_buf != 0xFFFFFFFFu) {
+        const ivec3 grid = ivec3(16, 9, 24);
+        const float z_near = ubo.proj[3][2];
+        const float z_far = 30.0;
+        const ivec2 tile = clamp(ivec2(gl_FragCoord.xy / screen * vec2(grid.xy)), ivec2(0),
+                                 grid.xy - 1);
+        const int slice = clamp(
+            int(floor(log(view_dist / z_near) / log(z_far / z_near) * float(grid.z))), 0,
+            grid.z - 1);
+        const uint ci = (uint(slice) * uint(grid.y) + uint(tile.y)) * uint(grid.x) + uint(tile.x);
+        const uint cb = nonuniformEXT(push.cluster_buf);
+        const uint base = ci * 65u;
+        const uint count = min(buffers[cb].data[base], 64u);
+        const uint lights = nonuniformEXT(push.lights_buf);
+        for (uint k = 0; k < count; ++k) {
+            const uint li = buffers[cb].data[base + 1u + k] * 8u;
+            const vec3 lpos = vec3(buf_float(lights, li), buf_float(lights, li + 1),
+                                   buf_float(lights, li + 2));
+            const float lradius = buf_float(lights, li + 3);
+            const vec3 lcol = vec3(buf_float(lights, li + 4), buf_float(lights, li + 5),
+                                   buf_float(lights, li + 6));
+            const vec3 to_light = lpos - world;
+            const float d = length(to_light);
+            float att = clamp(1.0 - d / lradius, 0.0, 1.0);
+            att *= att;
+            const float lndl = max(dot(N, to_light / max(d, 1e-4)), 0.0);
+            point_light += lcol * (lndl * att);
+        }
+    }
+
     const vec3 ambient = vec3(0.08);
-    out_color = vec4(albedo_rough.rgb * (ambient + vec3(ndl * shadow)), 1.0);
+    out_color = vec4(albedo_rough.rgb * (ambient + vec3(ndl * shadow) + point_light), 1.0);
 }
