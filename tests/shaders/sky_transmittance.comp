@@ -1,0 +1,66 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Atmosphere transmittance LUT (Plan §8.1, Bruneton convention): T(x, mu)
+// where x = altitude normalized [ground, top], mu = cos(view-zenith angle).
+// 256 x 64, computed once at startup. Optical depth integrates Rayleigh
+// (8 km scale height) + Mie (1.2 km) + ozone absorption along the ray to
+// the top of the atmosphere.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 3, rgba16f) writeonly uniform image2D storage_images[];
+
+layout(push_constant) uniform Push {
+    uint dst_img;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} push;
+
+const float kEarthRadius = 6360.0;  // km
+const float kAtmosphereTop = 6420.0;
+const float kRayleighScale = 8.0;
+const float kMieScale = 1.2;
+const vec3 kBetaR = vec3(5.8e-3, 13.5e-3, 33.1e-3); // 1/km at sea level
+const vec3 kBetaM = vec3(4.0e-3);
+const vec3 kBetaO = vec3(0.650e-3, 1.881e-3, 0.085e-3); // ozone absorption
+const int kSamples = 32;
+
+// Distance to the top of the atmosphere along a ray, or -1 if it hits the ground.
+float ray_top(float r, float mu) {
+    const float d = r * r * (mu * mu - 1.0) + kAtmosphereTop * kAtmosphereTop;
+    const float disc = d - r * r * mu * mu + r * r * mu * mu - r * r + r * r * mu * mu;
+    // solve r^2 + 2 r mu t + t^2 = top^2  ->  t = -r mu + sqrt(r^2 (mu^2-1) + top^2)
+    const float q = r * r * (mu * mu - 1.0) + kAtmosphereTop * kAtmosphereTop;
+    return -r * mu + sqrt(max(q, 0.0));
+}
+
+vec3 extinction_at(float r) {
+    const float h = max(r - kEarthRadius, 0.0);
+    const float rho_r = exp(-h / kRayleighScale);
+    const float rho_m = exp(-h / kMieScale);
+    // Ozone layer: triangular density centered at 25 km (Bruneton).
+    const float rho_o = max(0.0, 1.0 - abs(h - 25.0) / 15.0);
+    return kBetaR * rho_r + kBetaM * rho_m + kBetaO * rho_o;
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    // x: altitude in [ground, top] (bottom row = ground); y: mu in [-1, 1].
+    const float x = (float(px.x) + 0.5) / 256.0;
+    const float mu = (float(px.y) + 0.5) / 64.0 * 2.0 - 1.0;
+    const float r = kEarthRadius + x * (kAtmosphereTop - kEarthRadius);
+
+    const float t_end = ray_top(r, mu);
+    const float dt = t_end / float(kSamples);
+    vec3 optical = vec3(0.0);
+    for (int i = 0; i < kSamples; ++i) {
+        const float t = (float(i) + 0.5) * dt;
+        // Position along the ray: |p|^2 = r^2 + t^2 + 2 r t mu
+        const float pr = sqrt(r * r + t * t + 2.0 * r * t * mu);
+        optical += extinction_at(pr) * dt;
+    }
+    imageStore(storage_images[nonuniformEXT(push.dst_img)], px,
+               vec4(exp(-optical), 1.0));
+}

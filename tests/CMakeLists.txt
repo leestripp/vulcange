@@ -23,6 +23,9 @@ vge_compile_shaders(VGE_TEST_SHADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/easu_upsample.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky_transmittance.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky_view.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.frag
 )
 
 add_executable(vge_tests
@@ -41,6 +44,7 @@ add_executable(vge_tests
     decal_tests.cpp
     particle_tests.cpp
     upsample_tests.cpp
+    sky_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

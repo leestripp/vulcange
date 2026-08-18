@@ -1,0 +1,98 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Sky-view LUT (Plan §8.1): single-scattered sky radiance per view direction,
+// sampled by the fullscreen sky pass. 192 x 108, parameterized by view
+// zenith (y) and azimuth relative to the sun (x). Rayleigh + Mie
+// (Henyey-Greenstein) phase, transmittance from the LUT. Sun disc written as
+// HDR values.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 2) uniform sampler2D textures[];
+layout(set = 0, binding = 3, rgba16f) writeonly uniform image2D storage_images[];
+
+layout(push_constant) uniform Push {
+    uint transmittance_tex;
+    uint dst_img;
+    vec3 sun_dir; // normalized, points FROM the sun toward the scene... no: TO the sun
+    float sun_angular_radius;
+} push;
+
+const float kEarthRadius = 6360.0;
+const float kAtmosphereTop = 6420.0;
+const float kRayleighScale = 8.0;
+const float kMieScale = 1.2;
+const vec3 kBetaR = vec3(5.8e-3, 13.5e-3, 33.1e-3);
+const vec3 kBetaM = vec3(4.0e-3);
+const int kSamples = 16;
+const float kMieG = 0.8;
+const float kSunIntensity = 4.0; // HDR sun radiance scale
+
+vec3 transmittance_to_top(float r, float mu) {
+    // Mirror of the transmittance LUT parameterization.
+    const float x = clamp((r - kEarthRadius) / (kAtmosphereTop - kEarthRadius), 0.0, 1.0);
+    const float y = clamp(mu * 0.5 + 0.5, 0.0, 1.0);
+    return texture(textures[nonuniformEXT(push.transmittance_tex)], vec2(x, y)).rgb;
+}
+
+float rayleigh_phase(float mu) { return 3.0 / (16.0 * 3.14159265) * (1.0 + mu * mu); }
+
+float hg_phase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * 3.14159265 * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    // y: view zenith mu in [-0.2, 1] (slightly below horizon); x: azimuth
+    // relative to the sun in [0, 2 pi].
+    const float mu_v = (float(px.y) + 0.5) / 108.0 * 1.2 - 0.2;
+    const float azimuth = (float(px.x) + 0.5) / 192.0 * 6.2831853;
+
+    // Camera at ground level + 1 m.
+    const float r = kEarthRadius + 0.001;
+    // Reconstruct mu_sun (cos of angle between view and sun): the azimuth
+    // wraps around the sun's vertical plane; with sun at elevation e:
+    // cos(view, sun) = mu_v * mu_sun_direct + sin(zen_v) sin(zen_sun) cos(az)
+    const float mu_sun_direct = push.sun_dir.y; // sun zenith cos
+    const float sin_v = sqrt(max(1.0 - mu_v * mu_v, 0.0));
+    const float sin_s = sqrt(max(1.0 - mu_sun_direct * mu_sun_direct, 0.0));
+    const float cos_view_sun = mu_v * mu_sun_direct + sin_v * sin_s * cos(azimuth);
+
+    // March to the top of the atmosphere (or the horizon ground hit).
+    const float q = r * r * (mu_v * mu_v - 1.0) + kAtmosphereTop * kAtmosphereTop;
+    const float t_top = -r * mu_v + sqrt(max(q, 0.0));
+    // Ground intersection (only when looking down).
+    float t_end = t_top;
+    if (mu_v < 0.0) {
+        const float qg = r * r * (mu_v * mu_v - 1.0) + kEarthRadius * kEarthRadius;
+        if (qg > 0.0) {
+            t_end = min(t_end, -r * mu_v - sqrt(qg));
+        }
+    }
+    const float dt = t_end / float(kSamples);
+
+    vec3 inscatter = vec3(0.0);
+    for (int i = 0; i < kSamples; ++i) {
+        const float t = (float(i) + 0.5) * dt;
+        const float pr = sqrt(r * r + t * t + 2.0 * r * t * mu_v);
+        const float h = max(pr - kEarthRadius, 0.0);
+        // view-sun angle (cos_view_sun) is constant along the view ray.
+        const float rho_r = exp(-h / kRayleighScale);
+        const float rho_m = exp(-h / kMieScale);
+        const vec3 t_segment_view = transmittance_to_top(r, 1.0) /
+                                    max(transmittance_to_top(pr, 1.0), vec3(1e-6));
+        const vec3 t_sun = transmittance_to_top(pr, mu_sun_direct);
+        inscatter += t_segment_view * t_sun *
+                     (kBetaR * rho_r * rayleigh_phase(cos_view_sun) +
+                      kBetaM * rho_m * hg_phase(cos_view_sun, kMieG)) *
+                     dt;
+    }
+    vec3 sky = inscatter * kSunIntensity;
+
+    // NOTE: no sun disc here — at 192x108 the disc is sub-texel and
+    // vanishes. sky.frag adds it analytically per-pixel instead.
+
+    imageStore(storage_images[nonuniformEXT(push.dst_img)], px, vec4(sky, 1.0));
+}
