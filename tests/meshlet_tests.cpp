@@ -72,6 +72,7 @@ struct FrameUBO {
     float light_dir[4];
     float camera_pos[4];
     float frustum_planes[6][4];
+    math::Matrix4x4 inv_view_proj;
 };
 
 struct MeshletPush {
@@ -179,6 +180,7 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
     ubo.light_dir[0] = -0.4F; ubo.light_dir[1] = -1.0F; ubo.light_dir[2] = -0.6F;
     ubo.camera_pos[2] = 2.8F;
     extract_frustum(proj * view, ubo.frustum_planes);
+    ubo.inv_view_proj = (proj * view).inverse();
     REQUIRE(frame_ubo->write(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(&ubo), sizeof(ubo))));
 
@@ -321,7 +323,7 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
                       VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0, .size = sizeof(MeshletPush)};
     const VkPushConstantRange lighting_push_range{
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 12};
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 40};
     const VkPushConstantRange present_push_range{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 4};
     const VkPushConstantRange hiz_push_range{
@@ -501,7 +503,10 @@ TEST_CASE("Meshlets: Hi-Z occlusion culling through deferred chain" *
                                  vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                          lighting_pipeline->layout(), 0, 1, &set,
                                                          0, nullptr);
-                                 const std::uint32_t idx[3] = {1, 2, 3};
+                                 // {gbuffer idx x3, depth, shadow(off),
+        //  light_buf, splits}
+                                 const std::uint32_t idx[10] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0};
                                  vkCmdPushConstants(ctx.cmd, lighting_pipeline->layout(),
                                                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(idx),
                                                     idx);

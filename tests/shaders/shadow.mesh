@@ -1,0 +1,65 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Shadow-caster mesh shader (Plan §6.1): emits cluster triangles transformed
+// by the cascade light view-proj. Depth-only pass (no fragment stage).
+
+layout(local_size_x = 32) in;
+layout(triangles) out;
+layout(max_vertices = 64, max_primitives = 124) out;
+
+layout(set = 0, binding = 1) readonly buffer DataBuf { uint data[]; } buffers[];
+
+layout(push_constant) uniform Push {
+    mat4 model;
+    uint meshlet_count;
+    uint meshlet_buf;
+    uint vertex_buf;
+    uint vidx_buf;
+    uint tidx_buf;
+    uint light_buf;
+    uint cascade_index;
+} push;
+
+taskPayloadSharedEXT struct Payload {
+    uint meshlet_indices[32];
+} payload;
+
+float read_float(uint buf, uint i) {
+    return uintBitsToFloat(buffers[nonuniformEXT(buf)].data[i]);
+}
+uint read_uint(uint buf, uint i) { return buffers[nonuniformEXT(buf)].data[i]; }
+
+void main() {
+    const uint mi = payload.meshlet_indices[gl_WorkGroupID.x];
+    const uint mbase = mi * 16;
+    const uint vertex_offset = read_uint(push.meshlet_buf, mbase + 0);
+    const uint triangle_offset = read_uint(push.meshlet_buf, mbase + 1);
+    const uint vertex_count = read_uint(push.meshlet_buf, mbase + 2);
+    const uint triangle_count = read_uint(push.meshlet_buf, mbase + 3);
+
+    // Light view-proj for this cascade (16 uints at the cascade base).
+    const uint lbase = push.cascade_index * 40;
+    mat4 light_vp;
+    for (uint i = 0; i < 16; ++i) {
+        light_vp[i / 4][i % 4] = read_float(push.light_buf, lbase + i);
+    }
+
+    SetMeshOutputsEXT(vertex_count, triangle_count);
+
+    for (uint i = gl_LocalInvocationIndex; i < vertex_count; i += 32) {
+        const uint gi = read_uint(push.vidx_buf, vertex_offset + i);
+        const uint vb = gi * 8;
+        const vec3 pos = vec3(read_float(push.vertex_buf, vb + 0),
+                              read_float(push.vertex_buf, vb + 1),
+                              read_float(push.vertex_buf, vb + 2));
+        gl_MeshVerticesEXT[i].gl_Position = light_vp * push.model * vec4(pos, 1.0);
+    }
+
+    for (uint i = gl_LocalInvocationIndex; i < triangle_count; i += 32) {
+        const uint tri = read_uint(push.tidx_buf, triangle_offset + i);
+        gl_PrimitiveTriangleIndicesEXT[i] =
+            uvec3(tri & 0xFFu, (tri >> 8) & 0xFFu, (tri >> 16) & 0xFFu);
+    }
+}

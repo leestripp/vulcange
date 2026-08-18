@@ -157,3 +157,18 @@ TEST_CASE("Quaternion: nlerp takes shortest path across antipodal quaternions") 
     const Vector4 v{0.4F, 0.2F, -0.9F, 0.0F};
     CHECK(mid.rotate(v).approx_equal(expected.rotate(v), 1e-4F));
 }
+
+TEST_CASE("Matrix4x4: inverse round-trips view-projection") {
+    const auto view =
+        Matrix4x4::look_at_rh({1.5F, 2.0F, 2.8F, 0}, {0, 0.5F, 0, 0}, {0, 1, 0, 0});
+    const auto proj = Matrix4x4::perspective_vulkan(1.0472F, 16.0F / 9.0F, 0.1F);
+    const auto ortho = Matrix4x4::ortho_vulkan(-10, 10, -10, 10, 0.1F, 100.0F);
+    for (const auto& m : {proj * view, ortho * view}) {
+        const auto ident = m * m.inverse();
+        CHECK(ident.approx_equal(Matrix4x4::identity(), 1e-4F));
+        // NDC -> world -> NDC round-trip at a finite depth slice.
+        const auto world = m.inverse().transform_point({0.25F, -0.5F, 0.05F, 1.0F});
+        const auto ndc = m.transform_point(world);
+        CHECK(ndc.approx_equal({0.25F, -0.5F, 0.05F, 1.0F}, 1e-4F));
+    }
+}

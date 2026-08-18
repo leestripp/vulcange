@@ -1,0 +1,76 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Shadow-caster task shader (Plan §6.1): cluster frustum culling against the
+// cascade's light frustum. Light VP + planes come from the global buffer
+// table (uint-array convention), 40 uints per cascade:
+//   [0..15]  light view-proj (column-major)
+//   [16..39] 6 frustum planes (n, d)
+
+layout(local_size_x = 32) in;
+
+layout(set = 0, binding = 1) readonly buffer DataBuf { uint data[]; } buffers[];
+
+layout(push_constant) uniform Push {
+    mat4 model;
+    uint meshlet_count;
+    uint meshlet_buf;
+    uint vertex_buf;
+    uint vidx_buf;
+    uint tidx_buf;
+    uint light_buf;
+    uint cascade_index;
+} push;
+
+taskPayloadSharedEXT struct Payload {
+    uint meshlet_indices[32];
+} payload;
+
+shared uint s_visible_count;
+
+float light_float(uint base, uint o) {
+    return uintBitsToFloat(buffers[nonuniformEXT(push.light_buf)].data[base + o]);
+}
+
+void main() {
+    if (gl_LocalInvocationIndex == 0) {
+        s_visible_count = 0;
+    }
+    barrier();
+
+    const uint gid = gl_GlobalInvocationID.x;
+    bool visible = false;
+    if (gid < push.meshlet_count) {
+        const uint mbase = gid * 16; // 16 uints per GpuMeshlet
+        const uint b = nonuniformEXT(push.meshlet_buf);
+        const vec3 center = vec3(uintBitsToFloat(buffers[b].data[mbase + 4]),
+                                 uintBitsToFloat(buffers[b].data[mbase + 5]),
+                                 uintBitsToFloat(buffers[b].data[mbase + 6]));
+        const float radius = uintBitsToFloat(buffers[b].data[mbase + 7]);
+
+        const vec3 wcenter = (push.model * vec4(center, 1.0)).xyz;
+        const float wradius = radius * length(push.model[0].xyz);
+
+        // Light frustum sphere test.
+        const uint lbase = push.cascade_index * 40;
+        visible = true;
+        for (uint i = 0; i < 6; ++i) {
+            const vec4 plane = vec4(light_float(lbase, 16 + i * 4),
+                                    light_float(lbase, 16 + i * 4 + 1),
+                                    light_float(lbase, 16 + i * 4 + 2),
+                                    light_float(lbase, 16 + i * 4 + 3));
+            if (dot(plane.xyz, wcenter) + plane.w < -wradius) {
+                visible = false;
+                break;
+            }
+        }
+    }
+
+    if (visible) {
+        const uint slot = atomicAdd(s_visible_count, 1);
+        payload.meshlet_indices[slot] = gid;
+    }
+    barrier();
+    EmitMeshTasksEXT(s_visible_count, 1, 1);
+}

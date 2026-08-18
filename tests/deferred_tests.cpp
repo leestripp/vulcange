@@ -52,6 +52,7 @@ struct FrameUBO {
     math::Matrix4x4 proj;
     float light_dir[4];
     float camera_pos[4];
+    math::Matrix4x4 inv_view_proj;
 };
 
 struct MeshPush {
@@ -117,6 +118,7 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
     ubo.proj = proj;
     ubo.light_dir[0] = -0.4F; ubo.light_dir[1] = -1.0F; ubo.light_dir[2] = -0.6F;
     ubo.camera_pos[0] = 1.5F; ubo.camera_pos[1] = 1.0F; ubo.camera_pos[2] = 2.5F;
+    ubo.inv_view_proj = (proj * view).inverse();
     REQUIRE(frame_ubo->write(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(&ubo), sizeof(ubo))));
 
@@ -233,7 +235,7 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0, .size = sizeof(MeshPush)};
     const VkPushConstantRange lighting_push_range{
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 12};
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 40};
     const VkPushConstantRange present_push_range{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = 4};
 
@@ -388,7 +390,8 @@ TEST_CASE("Deferred: prepass -> G-Buffer -> lighting -> present, pixel readback"
                                  vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                          lighting_pipeline->layout(), 0, 1, &set,
                                                          0, nullptr);
-                                 const std::uint32_t idx[3] = {1, 2, 3};
+                                 const std::uint32_t idx[10] = {0, 0, 0, 0, 1, 2, 3, 0xFFFFFFFFu,
+                                                                0xFFFFFFFFu, 0};
                                  vkCmdPushConstants(ctx.cmd, lighting_pipeline->layout(),
                                                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(idx),
                                                     idx);
