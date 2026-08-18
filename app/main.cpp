@@ -92,6 +92,9 @@ struct MeshletPush {
     std::uint32_t tidx_buf;
     std::uint32_t hiz_tex;
     std::uint32_t stats_buf;
+    std::uint32_t lod_buf;
+    float lod_threshold;
+    float lod_px_factor;
 };
 
 struct ShadowPush {
@@ -405,6 +408,9 @@ int main() {
         push.tidx_buf = buf_base + 3;
         push.hiz_tex = invalid_index;
         push.stats_buf = invalid_index;
+        push.lod_buf = invalid_index;
+        push.lod_threshold = 0.0F;
+        push.lod_px_factor = 0.0F;
         vkCmdPushConstants(ctx.cmd, pipe.layout(),
                            VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,

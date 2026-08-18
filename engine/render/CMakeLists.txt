@@ -4,6 +4,7 @@ add_library(vge_render STATIC
     src/meshlet.cpp
     src/hiz.cpp
     src/csm.cpp
+    src/meshlet_lod.cpp
 )
 add_library(vge::render ALIAS vge_render)
 target_include_directories(vge_render PUBLIC include)

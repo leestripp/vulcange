@@ -32,6 +32,7 @@ add_executable(vge_tests
     clustered_tests.cpp
     gtao_tests.cpp
     post_tests.cpp
+    meshlet_lod_tests.cpp
     ${VGE_TEST_SHADERS}
 )
 target_link_libraries(vge_tests PRIVATE vge::math vge::async vge::platform vge::gpu vge::render doctest::doctest vge_warnings)

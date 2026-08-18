@@ -34,6 +34,9 @@ layout(push_constant) uniform Push {
     uint tidx_buf;
     uint hiz_tex;   // texture table index of the Hi-Z pyramid, 0xFFFFFFFF = off
     uint stats_buf; // buffer table index of {tested, emitted} counters, off if ~0
+    uint lod_buf;   // LOD DAG info buffer {group_error, parent_error, level, pad}, ~0 = off
+    float lod_threshold;  // screen-space error threshold in pixels
+    float lod_px_factor;  // abs(proj[0][0]) * screen_w * 0.5
 } push;
 
 taskPayloadSharedEXT struct Payload {
@@ -83,6 +86,21 @@ void main() {
         if (visible && cone_cutoff < 1.0) {
             const vec3 dir = wcenter - ubo.camera_pos;
             if (dot(dir, cone_axis) >= cone_cutoff * length(dir) + wradius) {
+                visible = false;
+            }
+        }
+        // LOD DAG cut (§7.2): render this cluster when its group error
+        // projects to <= threshold pixels but its parent group's error does
+        // not. Parent of root clusters is FLT_MAX, so roots always qualify
+        // when coarse enough.
+        if (visible && push.lod_buf != 0xFFFFFFFFu) {
+            const uint lb = nonuniformEXT(push.lod_buf);
+            const float group_error = uintBitsToFloat(buffers[lb].data[gid * 4 + 0]);
+            const float parent_error = uintBitsToFloat(buffers[lb].data[gid * 4 + 1]);
+            const float cdist = max(-(ubo.view * vec4(wcenter, 1.0)).z, 1e-4);
+            const float err_px = group_error * push.lod_px_factor / cdist;
+            const float perr_px = parent_error * push.lod_px_factor / cdist;
+            if (err_px > push.lod_threshold || perr_px <= push.lod_threshold) {
                 visible = false;
             }
         }
